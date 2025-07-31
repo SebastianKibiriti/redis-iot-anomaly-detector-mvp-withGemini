@@ -10,10 +10,10 @@
 ## Phase 1: Foundation & Ingestion (Days 1-3)
 
 ### Day 1 (Jul 31, Thu): Redis Setup & Basic Connection
-- [ ] **08:30 - 10:00:** **Redis Stack Installation via Docker Compose.**
+- [x] **08:30 - 10:00:** **Redis Stack Installation via Docker Compose.**
     - Create `docker-compose.yml` (see below for content).
     - Run `docker compose up -d`.
-- [ ] **10:00 - 12:00:** **Python Environment Setup.**
+- [x] **10:00 - 12:00:** **Python Environment Setup.**
     - Create virtual environment: `python -m venv venv`.
     - Activate: `source venv/bin/activate` (Linux/macOS) or `.\venv\Scripts\activate` (Windows PowerShell).
     - Install `redis-py`: `pip install redis`.
