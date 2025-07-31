@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  redis-stack:
+    image: redis/redis-stack:latest
+    ports:
+      - "6379:6379" # Redis server port
+      - "8001:8001" # RedisInsight dashboard port
+    volumes:
+      - redis_stack_data:/data # Persistent storage for Redis data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app_network
+
+volumes:
+  redis_stack_data: # Define the named volume for persistence
+
+networks:
+  app_network: # Define a custom network for our services
+    driver: bridge
