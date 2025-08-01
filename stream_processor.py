@@ -50,7 +50,6 @@ def process_messages():
     print("Checking for pending messages to recover...")
     while True:
         try:
-            # The special stream ID '0' tells xreadgroup to read from the PEL
             messages = r.xreadgroup(
                 groupname=CONSUMER_GROUP_NAME,
                 consumername=CONSUMER_NAME,
@@ -65,7 +64,6 @@ def process_messages():
 
             for stream_name, stream_messages in messages:
                 for message_id, message_data_bytes in stream_messages:
-                    print(f"RECOVERY: Processing pending message ID: {message_id}")
                     try:
                         decoded_data = {k: v for k, v in message_data_bytes.items()}
                         timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
@@ -81,15 +79,13 @@ def process_messages():
                         
                         if alert_data:
                             r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}': {alert_data}")
-
+                        
                         ts_client.add(ts_key, timestamp_ms, temperature,
                                       retention_msecs=2592000000,
                                       labels={'unit': 'celsius', 'device': device_id}
                                      )
                         
                         r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
-                        print(f"RECOVERY: Acknowledged message ID: {message_id}")
                     except Exception as ex:
                         print(f"CRITICAL ERROR (RECOVERY): Failed to process message {message_id}. Reason: {ex}")
                         
@@ -117,7 +113,6 @@ def process_messages():
 
             for stream_name, stream_messages in messages:
                 for message_id, message_data_bytes in stream_messages:
-                    print(f"DEBUG: Started processing message ID: {message_id}")
                     try:
                         decoded_data = {k: v for k, v in message_data_bytes.items()}
                         timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
@@ -133,7 +128,7 @@ def process_messages():
                         
                         if alert_data:
                             r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}': {alert_data}")
+                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
 
                         ts_client.add(ts_key, timestamp_ms, temperature,
                                       retention_msecs=2592000000,
@@ -141,10 +136,9 @@ def process_messages():
                                      )
                         
                         r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
-                        print(f"DEBUG: Finished processing and acknowledged message ID: {message_id}")
-
+                        
                     except Exception as ex:
-                        print(f"CRITICAL ERROR: Failed to process message {message_id}. Reason: {ex}")
+                        print(f"An unexpected error occurred processing message {message_id}: {ex}")
                         
         except redis.exceptions.ConnectionError as e:
             print(f"Lost connection to Redis. Retrying in 5 seconds... Error: {e}")
