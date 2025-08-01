@@ -55,7 +55,7 @@ The data flow is as follows:
 
 1.  **Clone the Repository:**
     ```bash
-    git clone https://github.com/your-username/redis-iot-anomaly-detector-mvp-withGemini.git
+    git clone https://github.com/sebastiankibiriti/redis-iot-anomaly-detector-mvp-withGemini.git
     cd redis-iot-anomaly-detector-mvp-withGemini
     ```
 2.  **Start Redis with Docker Compose:**
