@@ -66,7 +66,7 @@ def process_messages():
                     # Redis returns data as bytes, decode to string and then parse JSON
                     try:
                         # message_data_bytes is a dictionary of bytes, convert values to string
-                        decoded_data = {k.decode('utf-8'): v.decode('utf-8') for k, v in message_data_bytes.items()}
+                        decoded_data = {k: v for k, v in message_data_bytes.items()}
                         
                         # Assuming the producer sends JSON string for complex data or just simple fields
                         # If producer.py sends simple fields directly, no json.loads needed
