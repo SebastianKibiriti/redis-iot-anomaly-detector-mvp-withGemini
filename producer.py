@@ -10,11 +10,22 @@ STREAM_KEY = 'sensor:temperature:01' # The name of our Redis Stream
 
 def generate_sensor_data():
     """
-    Generates a dictionary of mock sensor data.
+    Generates a dictionary of mock sensor data, occasionally including anomalies.
     """
+    # There's a 1 in 10 chance of generating an anomalous temperature
+    if random.randint(1, 10) == 1:
+        # 50% chance for a high anomaly, 50% for a low one
+        if random.random() < 0.5:
+            temperature = 35.0  # High anomaly
+        else:
+            temperature = 15.0  # Low anomaly
+    else:
+        # 90% of the time, generate a normal temperature
+        temperature = round(random.uniform(20.0, 26.0), 2)
+
     return {
         "timestamp": time.time(),
-        "temperature_c": round(random.uniform(18.0, 25.0), 2),
+        "temperature_c": temperature,
         "humidity_percent": round(random.uniform(40.0, 60.0), 2)
     }
 
