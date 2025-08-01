@@ -6,27 +6,39 @@ import json
 # --- Configuration ---
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
-STREAM_KEY = 'sensor:temperature:01' # The name of our Redis Stream
+STREAM_KEY = 'sensor:temperature:01'
+
+# --- NEW: Anomaly Simulation Parameters ---
+# The chance (as a percentage) to generate an anomaly on each cycle
+ANOMALY_CHANCE = 5  # 5% chance of an anomaly per second
+
+# The range for normal temperatures
+NORMAL_TEMP_MIN = 20.0
+NORMAL_TEMP_MAX = 25.0
+
+# The range for anomalous temperatures
+ANOMALY_TEMP_MIN = 30.0
+ANOMALY_TEMP_MAX = 35.0
 
 def generate_sensor_data():
     """
-    Generates a dictionary of mock sensor data, occasionally including anomalies.
+    Generates a dictionary of mock sensor data with a random chance of anomaly.
     """
-    # There's a 1 in 10 chance of generating an anomalous temperature
-    if random.randint(1, 10) == 1:
-        # 50% chance for a high anomaly, 50% for a low one
-        if random.random() < 0.5:
-            temperature = 35.0  # High anomaly
-        else:
-            temperature = 15.0  # Low anomaly
+    temperature = None
+    humidity_percent = round(random.uniform(40.0, 60.0), 2)
+
+    # Use random.randint to check if we should generate an anomaly
+    if random.randint(1, 100) <= ANOMALY_CHANCE:
+        # Generate an anomalous temperature
+        temperature = round(random.uniform(ANOMALY_TEMP_MIN, ANOMALY_TEMP_MAX), 2)
     else:
-        # 90% of the time, generate a normal temperature
-        temperature = round(random.uniform(20.0, 26.0), 2)
+        # Generate a normal temperature
+        temperature = round(random.uniform(NORMAL_TEMP_MIN, NORMAL_TEMP_MAX), 2)
 
     return {
         "timestamp": time.time(),
         "temperature_c": temperature,
-        "humidity_percent": round(random.uniform(40.0, 60.0), 2)
+        "humidity_percent": humidity_percent
     }
 
 def run_producer():
@@ -38,23 +50,22 @@ def run_producer():
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
         print("Successfully connected to Redis. Starting data production.")
 
-        # This loop will run indefinitely, publishing new data every second
         while True:
-            # Generate a new data point
             data = generate_sensor_data()
             
-            # The xadd command appends a new entry to the stream
-            # The '*' tells Redis to automatically generate a unique ID for the entry
-            # data is a dictionary of field/value pairs for the stream entry
             entry_id = r.xadd(STREAM_KEY, data)
             
-            print(f"Published entry {entry_id} to stream '{STREAM_KEY}' with data: {data}")
+            # Print a more informative message
+            if data['temperature_c'] >= ANOMALY_TEMP_MIN or data['temperature_c'] <= NORMAL_TEMP_MIN:
+                 print(f"**ANOMALY PRODUCED** Published entry {entry_id} with data: {data}")
+            else:
+                 print(f"Published entry {entry_id} to stream '{STREAM_KEY}' with data: {data}")
             
-            time.sleep(1) # Wait for 1 second before the next entry
+            time.sleep(1)
 
     except redis.exceptions.ConnectionError as e:
         print(f"Connection Error: Could not connect to Redis at {REDIS_HOST}:{REDIS_PORT}")
-        print("Please ensure your Redis container is running.")
+        print("Please ensure your Docker container is running.")
     except KeyboardInterrupt:
         print("\nProducer stopped by user.")
     except Exception as e:
