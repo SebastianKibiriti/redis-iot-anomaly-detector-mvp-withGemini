@@ -79,6 +79,38 @@ def check_for_anomaly(r, ts_client, device_id, temperature, window_size=100, std
         print(f"Error during statistical anomaly check for device {device_id}: {e}")
         return False, None, None
 
+def _process_single_message(message_id, message_data):
+    """
+    Processes a single message from the stream. This is called by both the
+    recovery loop and the main processing loop.
+    """
+    decoded_data = {k: v for k, v in message_data.items()}
+    timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
+    temperature = float(decoded_data.get('temperature_c'))
+    device_id = INPUT_STREAM_KEY.split(':')[-1]
+    ts_key = f"device:{device_id}:temp"
+
+    # Anomaly Detection Logic
+    is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature)
+
+    if is_anomaly:
+        alert_data = {
+            'device_id': device_id,
+            'type': 'statistical_anomaly',
+            'temp_reading': temperature,
+            'moving_average': moving_average,
+            'standard_deviation': standard_deviation,
+            'timestamp': timestamp_ms
+        }
+        r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
+        print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
+
+    ts_client.add(ts_key, timestamp_ms, temperature,
+                  retention_msecs=2592000000,
+                  labels={'unit': 'celsius', 'device': device_id})
+
+    r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
+
 def process_messages():
     """
     Reads messages from the stream, checks for anomalies, stores data in Time Series, and acknowledges.
@@ -103,34 +135,9 @@ def process_messages():
 
             for stream_name, stream_messages in messages:
                 for message_id, message_data_bytes in stream_messages:
-                    try:
-                        decoded_data = {k: v for k, v in message_data_bytes.items()}
-                        timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
-                        temperature = float(decoded_data.get('temperature_c'))
-                        device_id = INPUT_STREAM_KEY.split(':')[-1]
-                        ts_key = f"device:{device_id}:temp"
-
-                        # Anomaly Detection Logic
-                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature)
-                        
-                        if is_anomaly:
-                            alert_data = {
-                                'device_id': device_id, 
-                                'type': 'statistical_anomaly', 
-                                'temp_reading': temperature, 
-                                'moving_average': moving_average,
-                                'standard_deviation': standard_deviation,
-                                'timestamp': timestamp_ms
-                            }
-                            r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
-
-                        ts_client.add(ts_key, timestamp_ms, temperature,
-                                      retention_msecs=2592000000,
-                                      labels={'unit': 'celsius', 'device': device_id}
-                                     )
-                        
-                        r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
+                    try:                        
+                        print(f"Recovering pending message: {message_id}")
+                        _process_single_message(message_id, message_data_bytes)
                     except Exception as ex:
                         print(f"CRITICAL ERROR (RECOVERY): Failed to process message {message_id}. Reason: {ex}")
                         
@@ -158,35 +165,8 @@ def process_messages():
 
             for stream_name, stream_messages in messages:
                 for message_id, message_data_bytes in stream_messages:
-                    try:
-                        decoded_data = {k: v for k, v in message_data_bytes.items()}
-                        timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
-                        temperature = float(decoded_data.get('temperature_c'))
-                        device_id = INPUT_STREAM_KEY.split(':')[-1]
-                        ts_key = f"device:{device_id}:temp"
-
-                        # Anomaly Detection Logic
-                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature)
-                        
-                        if is_anomaly:
-                            alert_data = {
-                                'device_id': device_id, 
-                                'type': 'statistical_anomaly', 
-                                'temp_reading': temperature, 
-                                'moving_average': moving_average,
-                                'standard_deviation': standard_deviation,
-                                'timestamp': timestamp_ms
-                            }
-                            r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
-
-                        ts_client.add(ts_key, timestamp_ms, temperature,
-                                      retention_msecs=2592000000,
-                                      labels={'unit': 'celsius', 'device': device_id}
-                                     )
-                        
-                        r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
-                        
+                    try:                        
+                        _process_single_message(message_id, message_data_bytes)
                     except Exception as ex:
                         print(f"An unexpected error occurred processing message {message_id}: {ex}")
                         
