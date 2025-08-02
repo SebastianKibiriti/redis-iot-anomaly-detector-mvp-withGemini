@@ -1,13 +1,14 @@
 import redis
 import json
 import time
-from flask import Flask, render_template
+from flask import Flask, render_template, request, jsonify
 from datetime import datetime
 
 # --- Configuration ---
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
 TS_KEY = 'device:01:temp'
+PARAMS_KEY = 'dashboard_params'
 
 # --- Redis Connection ---
 try:
@@ -36,9 +37,31 @@ dashboard_data_cache = {
 @app.route('/')
 def index():
     """
-    Renders the main dashboard page.
+    Renders the main dashboard page with the current parameters.
     """
-    return render_template('dashboard.html')
+    # Fetch current parameters from Redis to display on the form
+    params = r.hgetall(PARAMS_KEY)
+    if not params:
+        # Set default parameters if they don't exist
+        params = {'window_size': '100', 'std_dev_multiplier': '2'}
+        r.hset(PARAMS_KEY, mapping=params)
+    return render_template('dashboard.html', current_params=params)
+
+@app.route('/set_params', methods=['POST'])
+def set_params():
+    """
+    Sets the user-defined parameters in Redis.
+    """
+    try:
+        window_size = int(request.form.get('window_size', 100))
+        std_dev_multiplier = int(request.form.get('std_dev_multiplier', 2))
+        
+        # Store parameters in a Redis hash
+        r.hset(PARAMS_KEY, mapping={'window_size': window_size, 'std_dev_multiplier': std_dev_multiplier})
+        
+        return jsonify({'status': 'success', 'message': 'Parameters updated successfully.'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/data')
 def get_data():
@@ -46,11 +69,15 @@ def get_data():
     Returns the latest sensor data, moving average, and standard deviation bounds.
     """
     try:
-        # Fetch the last 100 data points from the Time Series
-        data_points = ts_client.range(TS_KEY, '-', '+', count=100)
+        # Fetch parameters from Redis
+        params = r.hgetall(PARAMS_KEY)
+        window_size = int(params.get('window_size', 100))
+        std_dev_multiplier = int(params.get('std_dev_multiplier', 2))
+
+        # Fetch the last 'window_size' data points from the Time Series
+        data_points = ts_client.range(TS_KEY, '-', '+', count=window_size)
         
-        # We need at least a certain number of points to perform the statistical calculation
-        if len(data_points) < 100:
+        if len(data_points) < window_size:
             return json.dumps(dashboard_data_cache)
 
         values = [float(val) for ts, val in data_points]
@@ -63,9 +90,9 @@ def get_data():
         variance = sum([(v - moving_average) ** 2 for v in values]) / len(values)
         standard_deviation = variance ** 0.5
         
-        # Calculate the anomaly bounds
-        std_dev_upper = moving_average + (2 * standard_deviation)
-        std_dev_lower = moving_average - (2 * standard_deviation)
+        # Calculate the anomaly bounds using the multiplier from Redis
+        std_dev_upper = moving_average + (std_dev_multiplier * standard_deviation)
+        std_dev_lower = moving_average - (std_dev_multiplier * standard_deviation)
 
         # Update the cache
         dashboard_data_cache['temperature'] = values
@@ -76,7 +103,6 @@ def get_data():
         
     except Exception as e:
         print(f"Error fetching data from Redis: {e}")
-        # In case of error, just return the last known data
         pass
 
     return json.dumps(dashboard_data_cache)
