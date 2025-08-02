@@ -40,6 +40,45 @@ def create_consumer_group():
             print(f"Error creating consumer group: {e}")
             exit(1)
 
+def check_for_anomaly(r, ts_client, device_id, temperature, window_size=100, std_dev_multiplier=2):
+    """
+    Performs statistical anomaly detection using moving average and standard deviation.
+    """
+    ts_key = f"device:{device_id}:temp"
+
+    try:
+        # Fetch the last 'window_size' data points
+        # The timestamp '-' and '+' represent the oldest and newest data points in the Time Series
+        # The last parameter is the count
+        data_points = ts_client.range(ts_key, '-', '+', count=window_size)
+        
+        # We need at least 'window_size' points to perform a good calculation
+        if len(data_points) < window_size:
+            return False, None, None
+
+        # Extract just the temperature values from the list of [timestamp, value] pairs
+        values = [float(val) for ts, val in data_points]
+
+        # Calculate the moving average
+        moving_average = sum(values) / len(values)
+
+        # Calculate the standard deviation
+        variance = sum([(v - moving_average) ** 2 for v in values]) / len(values)
+        standard_deviation = variance ** 0.5
+        
+        # Define the threshold for an anomaly
+        upper_bound = moving_average + (std_dev_multiplier * standard_deviation)
+        lower_bound = moving_average - (std_dev_multiplier * standard_deviation)
+        
+        # Check if the current temperature is an anomaly
+        is_anomaly = not (lower_bound <= temperature <= upper_bound)
+        
+        return is_anomaly, moving_average, standard_deviation
+
+    except Exception as e:
+        print(f"Error during statistical anomaly check for device {device_id}: {e}")
+        return False, None, None
+
 def process_messages():
     """
     Reads messages from the stream, checks for anomalies, stores data in Time Series, and acknowledges.
@@ -71,15 +110,21 @@ def process_messages():
                         device_id = INPUT_STREAM_KEY.split(':')[-1]
                         ts_key = f"device:{device_id}:temp"
 
-                        alert_data = None
-                        if temperature > MAX_TEMP:
-                            alert_data = {'device_id': device_id, 'type': 'high_temp', 'temp_reading': temperature, 'threshold': MAX_TEMP, 'timestamp': timestamp_ms}
-                        elif temperature < MIN_TEMP:
-                            alert_data = {'device_id': device_id, 'type': 'low_temp', 'temp_reading': temperature, 'threshold': MIN_TEMP, 'timestamp': timestamp_ms}
+                        # Anomaly Detection Logic
+                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature)
                         
-                        if alert_data:
+                        if is_anomaly:
+                            alert_data = {
+                                'device_id': device_id, 
+                                'type': 'statistical_anomaly', 
+                                'temp_reading': temperature, 
+                                'moving_average': moving_average,
+                                'standard_deviation': standard_deviation,
+                                'timestamp': timestamp_ms
+                            }
                             r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                        
+                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
+
                         ts_client.add(ts_key, timestamp_ms, temperature,
                                       retention_msecs=2592000000,
                                       labels={'unit': 'celsius', 'device': device_id}
@@ -120,13 +165,18 @@ def process_messages():
                         device_id = INPUT_STREAM_KEY.split(':')[-1]
                         ts_key = f"device:{device_id}:temp"
 
-                        alert_data = None
-                        if temperature > MAX_TEMP:
-                            alert_data = {'device_id': device_id, 'type': 'high_temp', 'temp_reading': temperature, 'threshold': MAX_TEMP, 'timestamp': timestamp_ms}
-                        elif temperature < MIN_TEMP:
-                            alert_data = {'device_id': device_id, 'type': 'low_temp', 'temp_reading': temperature, 'threshold': MIN_TEMP, 'timestamp': timestamp_ms}
+                        # Anomaly Detection Logic
+                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature)
                         
-                        if alert_data:
+                        if is_anomaly:
+                            alert_data = {
+                                'device_id': device_id, 
+                                'type': 'statistical_anomaly', 
+                                'temp_reading': temperature, 
+                                'moving_average': moving_average,
+                                'standard_deviation': standard_deviation,
+                                'timestamp': timestamp_ms
+                            }
                             r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
                             print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
 
