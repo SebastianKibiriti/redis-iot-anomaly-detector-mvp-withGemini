@@ -1,20 +1,21 @@
 import redis
-import time
 import json
+import time
+from datetime import datetime
 
 # --- Configuration ---
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
-ALERT_STREAM_KEY = 'anomaly_alerts'
-CONSUMER_GROUP_NAME = 'alert_logger_group'
-CONSUMER_NAME = 'alert_consumer_01'
+ANOMALY_ALERTS_STREAM = 'anomaly_alerts'
+CONSUMER_GROUP_NAME = 'alert_consumer_group'
+CONSUMER_NAME = 'alert_processor-01'
 
 # --- Redis Connection ---
 try:
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
     if not r.ping():
         raise redis.exceptions.ConnectionError("Could not ping Redis server.")
-    print("Successfully connected to Redis for alert consumption.")
+    print("Successfully connected to Redis for alert processing.")
 except redis.exceptions.ConnectionError as e:
     print(f"ERROR: Could not connect to Redis at {REDIS_HOST}:{REDIS_PORT}. Please ensure it's running.")
     print(f"Error details: {e}")
@@ -22,11 +23,11 @@ except redis.exceptions.ConnectionError as e:
 
 def create_consumer_group():
     """
-    Creates the consumer group for the alert stream if it doesn't already exist.
+    Creates the consumer group if it doesn't already exist.
     """
     try:
-        r.xgroup_create(ALERT_STREAM_KEY, CONSUMER_GROUP_NAME, id='0', mkstream=True)
-        print(f"Consumer group '{CONSUMER_GROUP_NAME}' created for stream '{ALERT_STREAM_KEY}'.")
+        r.xgroup_create(ANOMALY_ALERTS_STREAM, CONSUMER_GROUP_NAME, id='0', mkstream=True)
+        print(f"Consumer group '{CONSUMER_GROUP_NAME}' created for stream '{ANOMALY_ALERTS_STREAM}'.")
     except redis.exceptions.ResponseError as e:
         if "BUSYGROUP" in str(e):
             print(f"Consumer group '{CONSUMER_GROUP_NAME}' already exists.")
@@ -34,45 +35,53 @@ def create_consumer_group():
             print(f"Error creating consumer group: {e}")
             exit(1)
 
-def consume_alerts():
+def process_alerts():
     """
-    Consumes and logs anomaly alerts from the stream.
+    Listens for new alerts and prints them to the console.
     """
-    print(f"Starting alert consumer '{CONSUMER_NAME}' in group '{CONSUMER_GROUP_NAME}' for stream '{ALERT_STREAM_KEY}'...")
-    
+    print(f"Starting alert consumer '{CONSUMER_NAME}' for stream '{ANOMALY_ALERTS_STREAM}'...")
     while True:
         try:
-            # Use XREADGROUP to get new alerts.
+            # Read from the stream, waiting for new messages (block=1000)
             messages = r.xreadgroup(
                 groupname=CONSUMER_GROUP_NAME,
                 consumername=CONSUMER_NAME,
-                streams={ALERT_STREAM_KEY: '>'},
+                streams={ANOMALY_ALERTS_STREAM: '>'},
                 count=1,
                 block=1000
             )
 
             if not messages:
-                time.sleep(0.1)
                 continue
 
             for stream_name, stream_messages in messages:
                 for message_id, message_data_bytes in stream_messages:
                     try:
-                        # Data is already decoded due to `decode_responses=True`
-                        alert_data = {k: v for k, v in message_data_bytes.items()}
+                        alert = {k: v for k, v in message_data_bytes.items()}
                         
-                        # Print a human-readable alert message
-                        print("--- NEW ANOMALY ALERT ---")
+                        alert_type = alert.get('type')
+                        timestamp_ms = int(alert.get('timestamp'))
+                        timestamp = datetime.fromtimestamp(timestamp_ms / 1000).strftime('%Y-%m-%d %H:%M:%S')
+
+                        print("\n--- NEW ANOMALY ALERT ---")
                         print(f"Alert ID: {message_id}")
-                        print(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(alert_data['timestamp']) / 1000))}")
-                        print(f"Device ID: {alert_data['device_id']}")
-                        print(f"Type: {alert_data['type']}")
-                        print(f"Temperature: {alert_data['temp_reading']}°C (Threshold: {alert_data['threshold']}°C)")
+                        print(f"Timestamp: {timestamp}")
+                        print(f"Device ID: {alert.get('device_id')}")
+                        print(f"Type: {alert_type}")
+                        
+                        # Handle both old and new alert formats
+                        if alert_type in ['high_temp', 'low_temp']:
+                            print(f"Temperature: {float(alert.get('temp_reading')):.2f}°C (Threshold: {float(alert.get('threshold')):.2f}°C)")
+                        elif alert_type == 'statistical_anomaly':
+                            print(f"Temperature: {float(alert.get('temp_reading')):.2f}°C")
+                            print(f"Moving Average: {float(alert.get('moving_average')):.2f}°C")
+                            print(f"Standard Deviation: {float(alert.get('standard_deviation')):.2f}°C")
+                        
                         print("--------------------------")
                         
-                        # Acknowledge the message to remove it from the Pending Entries List (PEL)
-                        r.xack(ALERT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
-                        
+                        # Acknowledge the message
+                        r.xack(ANOMALY_ALERTS_STREAM, CONSUMER_GROUP_NAME, message_id)
+                    
                     except Exception as ex:
                         print(f"Error processing alert {message_id}: {ex}")
         
@@ -88,4 +97,4 @@ def consume_alerts():
 
 if __name__ == "__main__":
     create_consumer_group()
-    consume_alerts()
+    process_alerts()
