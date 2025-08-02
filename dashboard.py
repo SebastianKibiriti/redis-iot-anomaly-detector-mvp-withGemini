@@ -70,6 +70,24 @@ def update_graph_live(n, relayout_data):
     df = pd.DataFrame(data, columns=['timestamp', 'temperature'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
+    # --- Dynamically calculate the Y-axis range for better visibility ---
+    Y_AXIS_PADDING = 3  # Degrees to add above and below the max/min temps
+    MIN_Y_AXIS_SPAN = 20 # Minimum degrees to show on the y-axis
+
+    min_temp = df['temperature'].min()
+    max_temp = df['temperature'].max()
+
+    y_range_min = min_temp - Y_AXIS_PADDING
+    y_range_max = max_temp + Y_AXIS_PADDING
+
+    # Ensure the y-axis has a minimum span to prevent it from looking too "zoomed in"
+    # on very stable data, while still expanding for anomalies.
+    current_span = y_range_max - y_range_min
+    if current_span < MIN_Y_AXIS_SPAN:
+        center = (y_range_max + y_range_min) / 2
+        y_range_min = center - (MIN_Y_AXIS_SPAN / 2)
+        y_range_max = center + (MIN_Y_AXIS_SPAN / 2)
+
     # Create the Plotly figure
     fig = go.Figure(
         data=[
@@ -85,8 +103,8 @@ def update_graph_live(n, relayout_data):
             xaxis_title='Time',
             yaxis_title='Temperature (°C)',
             yaxis=dict(
-                range=[15, 30], # Keep a fixed range for better visual stability
-                fixedrange=False # Allow the user to zoom on the y-axis
+                range=[y_range_min, y_range_max], # Use a dynamic range to show all data
+                fixedrange=False # Allow the user to zoom on the y-axis if they want
             ),
             xaxis=dict(
                 rangeselector=dict(
