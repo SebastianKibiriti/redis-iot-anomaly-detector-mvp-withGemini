@@ -1,11 +1,12 @@
 import redis
 import json
 import time
+import os
 from datetime import datetime
 
 # --- Configuration ---
-REDIS_HOST = 'localhost'
-REDIS_PORT = 6379
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 INPUT_STREAM_KEY = 'sensor:temperature:01' # The stream our producer sends to
 CONSUMER_GROUP_NAME = 'anomaly_detector_group'
 CONSUMER_NAME = 'processor-01' # Unique name for this consumer instance
@@ -38,7 +39,7 @@ def create_consumer_group():
             print(f"Error creating consumer group: {e}")
             exit(1)
 
-def check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev_multiplier):
+def check_for_anomaly(ts_client, device_id, temperature, window_size, std_dev_multiplier):
     """
     Performs statistical anomaly detection using moving average and standard deviation.
     """
@@ -68,6 +69,40 @@ def check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev
         print(f"Error during statistical anomaly check for device {device_id}: {e}")
         return False, None, None
 
+def _process_and_ack_message(message_id, message_data, params):
+    """
+    Helper function to process a single message, check for anomalies, and acknowledge.
+    """
+    try:
+        window_size = int(params.get('window_size', 100))
+        std_dev_multiplier = int(params.get('std_dev_multiplier', 2))
+
+        decoded_data = {k: v for k, v in message_data.items()}
+        timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
+        temperature = float(decoded_data.get('temperature_c'))
+        device_id = INPUT_STREAM_KEY.split(':')[-1]
+        ts_key = f"device:{device_id}:temp"
+
+        # Anomaly Detection Logic with dynamic parameters
+        is_anomaly, moving_average, standard_deviation = check_for_anomaly(ts_client, device_id, temperature, window_size, std_dev_multiplier)
+
+        if is_anomaly:
+            alert_data = {
+                'device_id': device_id,
+                'type': 'statistical_anomaly',
+                'temp_reading': temperature,
+                'moving_average': moving_average,
+                'standard_deviation': standard_deviation,
+                'timestamp': timestamp_ms
+            }
+            r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
+            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
+
+        ts_client.add(ts_key, timestamp_ms, temperature, retention_msecs=(30 * 24 * 60 * 60 * 1000), labels={'unit': 'celsius', 'device': device_id})
+        r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
+    except Exception as ex:
+        print(f"CRITICAL ERROR: Failed to process message {message_id}. Reason: {ex}")
+
 def process_messages():
     """
     Reads messages from the stream, checks for anomalies, stores data in Time Series, and acknowledges.
@@ -79,10 +114,6 @@ def process_messages():
     while True:
         try:
             # Fetch parameters from Redis before processing starts
-            params = r.hgetall(PARAMS_KEY)
-            window_size = int(params.get('window_size', 100))
-            std_dev_multiplier = int(params.get('std_dev_multiplier', 2))
-            
             messages = r.xreadgroup(
                 groupname=CONSUMER_GROUP_NAME,
                 consumername=CONSUMER_NAME,
@@ -96,37 +127,9 @@ def process_messages():
                 break
 
             for stream_name, stream_messages in messages:
-                for message_id, message_data_bytes in stream_messages:
-                    try:
-                        decoded_data = {k: v for k, v in message_data_bytes.items()}
-                        timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
-                        temperature = float(decoded_data.get('temperature_c'))
-                        device_id = INPUT_STREAM_KEY.split(':')[-1]
-                        ts_key = f"device:{device_id}:temp"
-
-                        # Anomaly Detection Logic with dynamic parameters
-                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev_multiplier)
-                        
-                        if is_anomaly:
-                            alert_data = {
-                                'device_id': device_id, 
-                                'type': 'statistical_anomaly', 
-                                'temp_reading': temperature, 
-                                'moving_average': moving_average,
-                                'standard_deviation': standard_deviation,
-                                'timestamp': timestamp_ms
-                            }
-                            r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
-
-                        ts_client.add(ts_key, timestamp_ms, temperature,
-                                      retention_msecs=2592000000,
-                                      labels={'unit': 'celsius', 'device': device_id}
-                                     )
-                        
-                        r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
-                    except Exception as ex:
-                        print(f"CRITICAL ERROR (RECOVERY): Failed to process message {message_id}. Reason: {ex}")
+                params = r.hgetall(PARAMS_KEY) # Fetch params for this batch
+                for message_id, message_data in stream_messages:
+                    _process_and_ack_message(message_id, message_data, params)
                         
         except redis.exceptions.ConnectionError as e:
             print(f"Lost connection to Redis during recovery. Retrying in 5 seconds... Error: {e}")
@@ -139,10 +142,6 @@ def process_messages():
     while True:
         try:
             # Fetch parameters from Redis at the start of each loop iteration
-            params = r.hgetall(PARAMS_KEY)
-            window_size = int(params.get('window_size', 100))
-            std_dev_multiplier = int(params.get('std_dev_multiplier', 2))
-            
             messages = r.xreadgroup(
                 groupname=CONSUMER_GROUP_NAME,
                 consumername=CONSUMER_NAME,
@@ -156,38 +155,9 @@ def process_messages():
                 continue
 
             for stream_name, stream_messages in messages:
-                for message_id, message_data_bytes in stream_messages:
-                    try:
-                        decoded_data = {k: v for k, v in message_data_bytes.items()}
-                        timestamp_ms = int(float(decoded_data.get('timestamp')) * 1000)
-                        temperature = float(decoded_data.get('temperature_c'))
-                        device_id = INPUT_STREAM_KEY.split(':')[-1]
-                        ts_key = f"device:{device_id}:temp"
-
-                        # Anomaly Detection Logic with dynamic parameters
-                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev_multiplier)
-                        
-                        if is_anomaly:
-                            alert_data = {
-                                'device_id': device_id, 
-                                'type': 'statistical_anomaly', 
-                                'temp_reading': temperature, 
-                                'moving_average': moving_average,
-                                'standard_deviation': standard_deviation,
-                                'timestamp': timestamp_ms
-                            }
-                            r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
-
-                        ts_client.add(ts_key, timestamp_ms, temperature,
-                                      retention_msecs=2592000000,
-                                      labels={'unit': 'celsius', 'device': device_id}
-                                     )
-                        
-                        r.xack(INPUT_STREAM_KEY, CONSUMER_GROUP_NAME, message_id)
-                        
-                    except Exception as ex:
-                        print(f"An unexpected error occurred processing message {message_id}: {ex}")
+                params = r.hgetall(PARAMS_KEY) # Fetch params for this batch
+                for message_id, message_data in stream_messages:
+                    _process_and_ack_message(message_id, message_data, params)
                         
         except redis.exceptions.ConnectionError as e:
             print(f"Lost connection to Redis. Retrying in 5 seconds... Error: {e}")
@@ -198,3 +168,7 @@ def process_messages():
         except Exception as e:
             print(f"An unhandled error occurred in the main loop: {e}")
             time.sleep(1)
+
+if __name__ == "__main__":
+    create_consumer_group()
+    process_messages()
