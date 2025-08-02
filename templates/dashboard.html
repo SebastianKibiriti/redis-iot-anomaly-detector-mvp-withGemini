@@ -6,13 +6,35 @@
     <title>IoT Anomaly Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f2f5; margin: 0; }
-        .container { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 90%; width: 800px; text-align: center; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f2f5; margin: 0; padding: 20px; box-sizing: border-box; }
+        .container { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 90%; width: 800px; text-align: center; margin-bottom: 20px; }
+        .params-form { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 90%; width: 800px; display: flex; justify-content: center; align-items: center; gap: 20px; flex-wrap: wrap; }
         h1 { color: #333; }
         canvas { max-width: 100%; height: auto; }
+        .form-group { display: flex; flex-direction: column; align-items: flex-start; }
+        .form-group label { margin-bottom: 5px; font-weight: bold; }
+        .form-group input { padding: 8px; border: 1px solid #ccc; border-radius: 8px; width: 150px; }
+        .form-group button { padding: 10px 20px; border: none; border-radius: 8px; background-color: #007bff; color: white; font-weight: bold; cursor: pointer; transition: background-color 0.3s ease; }
+        .form-group button:hover { background-color: #0056b3; }
     </style>
 </head>
 <body>
+    <div class="params-form">
+        <form id="paramForm">
+            <div class="form-group">
+                <label for="window_size">Window Size:</label>
+                <input type="number" id="window_size" name="window_size" value="{{ current_params['window_size'] }}" min="10">
+            </div>
+            <div class="form-group">
+                <label for="std_dev_multiplier">Std Dev Multiplier:</label>
+                <input type="number" id="std_dev_multiplier" name="std_dev_multiplier" value="{{ current_params['std_dev_multiplier'] }}" step="1" min="1">
+            </div>
+            <div class="form-group">
+                <button type="submit">Update Parameters</button>
+            </div>
+        </form>
+    </div>
+
     <div class="container">
         <h1>Real-Time Temperature & Anomaly Detection</h1>
         <canvas id="temperatureChart"></canvas>
@@ -89,6 +111,26 @@
                 })
                 .catch(error => console.error('Error fetching data:', error));
         }
+
+        // Handle form submission
+        document.getElementById('paramForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const form = event.target;
+            const formData = new FormData(form);
+            fetch('/set_params', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    console.log(data.message);
+                } else {
+                    console.error('Error updating parameters:', data.message);
+                }
+            })
+            .catch(error => console.error('Error submitting form:', error));
+        });
 
         // Fetch data every 2 seconds
         setInterval(fetchData, 2000);
