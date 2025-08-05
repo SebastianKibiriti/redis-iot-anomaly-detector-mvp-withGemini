@@ -137,7 +137,7 @@ def update_graph_live(n, selected_device_id, live_view_status):
             alert = {k: v for k, v in alert_bytes.items()}
             if alert.get('device_id') == selected_device_id:
                 anomaly_data.append({
-                    'timestamp': pd.to_datetime(float(alert.get('timestamp')), unit='ms'),
+                    'timestamp': float(alert.get('timestamp')),
                     'temperature': float(alert.get('temp_reading'))
                 })
     except Exception as e:
@@ -146,6 +146,8 @@ def update_graph_live(n, selected_device_id, live_view_status):
     anomaly_df = pd.DataFrame(anomaly_data)
 
     if not anomaly_df.empty:
+        anomaly_df['timestamp'] = pd.to_datetime(anomaly_df['timestamp'], unit='ms', utc=True)
+        anomaly_df['timestamp'] = anomaly_df['timestamp'].dt.tz_convert('Africa/Johannesburg')
         fig.add_trace(go.Scatter(
             x=anomaly_df['timestamp'], y=anomaly_df['temperature'], mode='markers',
             name='Anomaly Alert', marker=dict(color='red', size=10, symbol='circle')
