@@ -55,12 +55,14 @@ def check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev
 
         moving_average = sum(values) / len(values)
 
-        variance = sum([(v - moving_average) ** 2 for v in values]) / len(values)
+        # Corrected calculation for sample standard deviation
+        variance = sum([(v - moving_average) ** 2 for v in values]) / (len(values) - 1)
         standard_deviation = variance ** 0.5
         
         upper_bound = moving_average + (std_dev_multiplier * standard_deviation)
         lower_bound = moving_average - (std_dev_multiplier * standard_deviation)
         
+        # The core anomaly detection logic
         is_anomaly = not (lower_bound <= temperature <= upper_bound)
         
         return is_anomaly, moving_average, standard_deviation
@@ -107,7 +109,7 @@ def process_messages():
                         # Anomaly Detection Logic with dynamic parameters
                         params = r.hgetall(PARAMS_KEY)
                         window_size = int(params.get('window_size', 100))
-                        std_dev_multiplier = int(params.get('std_dev_multiplier', 2))
+                        std_dev_multiplier = float(params.get('std_dev_multiplier', 2.0))
                         is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev_multiplier)
                         
                         if is_anomaly:
