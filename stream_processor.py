@@ -49,27 +49,37 @@ def check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev
         data_points = ts_client.range(ts_key, '-', '+', count=window_size)
         
         if len(data_points) < window_size:
-            return False, None, None
+            return False, None, None, None, None
 
         values = [float(val) for ts, val in data_points]
 
         moving_average = sum(values) / len(values)
 
-        # Corrected calculation for sample standard deviation
+        # --- FIX: Handle cases with insufficient data or zero deviation ---
+        if len(values) < 2:
+            # Not enough data to calculate variance, so no anomaly can be determined.
+            return False, moving_average, 0, None, None
+
         variance = sum([(v - moving_average) ** 2 for v in values]) / (len(values) - 1)
         standard_deviation = variance ** 0.5
         
         upper_bound = moving_average + (std_dev_multiplier * standard_deviation)
         lower_bound = moving_average - (std_dev_multiplier * standard_deviation)
-        
+
+        # Handle the case where all values in the window are the same.
+        if standard_deviation == 0:
+            # If all historical data is identical, any deviation is an anomaly.
+            is_anomaly = (temperature != moving_average)
+            return is_anomaly, moving_average, standard_deviation, lower_bound, upper_bound
+
         # The core anomaly detection logic
         is_anomaly = not (lower_bound <= temperature <= upper_bound)
         
-        return is_anomaly, moving_average, standard_deviation
+        return is_anomaly, moving_average, standard_deviation, lower_bound, upper_bound
 
     except Exception as e:
         print(f"Error during statistical anomaly check for device {device_id}: {e}")
-        return False, None, None
+        return False, None, None, None, None
 
 def process_messages():
     """
@@ -110,19 +120,27 @@ def process_messages():
                         params = r.hgetall(PARAMS_KEY)
                         window_size = int(params.get('window_size', 100))
                         std_dev_multiplier = float(params.get('std_dev_multiplier', 2.0))
-                        is_anomaly, moving_average, standard_deviation = check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev_multiplier)
+                        is_anomaly, moving_average, standard_deviation, lower_bound, upper_bound = check_for_anomaly(r, ts_client, device_id, temperature, window_size, std_dev_multiplier)
                         
                         if is_anomaly:
+                            # --- FIX: Log detailed info when an anomaly is detected ---
+                            print(
+                                f"*** ANOMALY DETECTED for device {device_id}! ***\n"
+                                f"    - Temperature: {temperature:.2f}\n"
+                                f"    - Lower Bound: {lower_bound:.2f}\n"
+                                f"    - Upper Bound: {upper_bound:.2f}\n"
+                                f"    - Moving Avg: {moving_average:.2f}\n"
+                                f"    - Std Dev: {standard_deviation:.2f}"
+                            )
                             alert_data = {
                                 'device_id': device_id, 
                                 'type': 'statistical_anomaly', 
                                 'temp_reading': temperature, 
-                                'moving_average': moving_average,
-                                'standard_deviation': standard_deviation,
+                                'moving_average': round(moving_average, 2),
+                                'standard_deviation': round(standard_deviation, 2),
                                 'timestamp': timestamp_ms
                             }
                             r.xadd(ANOMALY_ALERTS_STREAM, alert_data)
-                            print(f"*** ANOMALY DETECTED for device {device_id}! *** Published alert to '{ANOMALY_ALERTS_STREAM}'.")
 
                         ts_client.add(ts_key, timestamp_ms, temperature,
                                       retention_msecs=2592000000,

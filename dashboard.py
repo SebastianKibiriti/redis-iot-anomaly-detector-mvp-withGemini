@@ -83,16 +83,14 @@ def update_graph_live(n, selected_device_id, live_view_status):
     
     params = r.hgetall(PARAMS_KEY)
     window_size = int(params.get('window_size', 100))
-    std_dev_multiplier = int(params.get('std_dev_multiplier', 2))
+    std_dev_multiplier = float(params.get('std_dev_multiplier', 2.0))
 
-    # This ensures the graph always displays data for the entire time window,
-    # even if there are fewer than 100 data points.
-    time_window_ms = 30 * 60 * 1000  # 30 minutes in milliseconds
-    start_time = int(time.time() * 1000) - time_window_ms
-    end_time = int(time.time() * 1000)
-    
+    # --- FIX: Fetch data by count to match the processor's logic ---
     try:
-        data = ts_client.range(ts_key, start_time, end_time)
+        # Use revrange to get the latest N points, which is what the processor's logic implies.
+        # Fetch a larger number (1000) to ensure the rolling window is accurate for the visible data.
+        data = ts_client.revrange(ts_key, '-', '+', count=1000)
+        data.reverse() # revrange returns newest first, so reverse to get chronological order.
     except Exception as e:
         print(f"Error querying Redis Time Series for key '{ts_key}': {e}")
         return go.Figure()
@@ -112,21 +110,33 @@ def update_graph_live(n, selected_device_id, live_view_status):
     ))
     
     if len(df) > 1:
-        moving_average = df['temperature'].mean()
-        standard_deviation = df['temperature'].std()
+        # --- FIX: Shift the data to calculate bounds based on *past* data, matching the processor ---
+        window_size = int(params.get('window_size', 100))
+        # The processor checks a new point against the stats of the *previous* `window_size` points.
+        # Shifting the series makes the rolling calculation use the window of data *before* each point.
+        shifted_temp = df['temperature'].shift(1)
+        rolling_stats = shifted_temp.rolling(window=window_size, min_periods=1)
+        moving_average = rolling_stats.mean()
+        standard_deviation = rolling_stats.std()
+
+        # Replace NaN from initial periods with the first valid value
+        moving_average = moving_average.bfill()
+        standard_deviation = standard_deviation.bfill()
+
+        std_dev_multiplier = float(params.get('std_dev_multiplier', 2.0))
         std_dev_upper = moving_average + (std_dev_multiplier * standard_deviation)
         std_dev_lower = moving_average - (std_dev_multiplier * standard_deviation)
 
         fig.add_trace(go.Scatter(
-            x=df['timestamp'], y=[moving_average] * len(df), mode='lines', 
+            x=df['timestamp'], y=moving_average, mode='lines', 
             name='Moving Average', line=dict(color='orange', dash='dot')
         ))
         fig.add_trace(go.Scatter(
-            x=df['timestamp'], y=[std_dev_upper] * len(df), mode='lines', 
+            x=df['timestamp'], y=std_dev_upper, mode='lines', 
             name='Upper Bound', line=dict(color='red', dash='dash')
         ))
         fig.add_trace(go.Scatter(
-            x=df['timestamp'], y=[std_dev_lower] * len(df), mode='lines', 
+            x=df['timestamp'], y=std_dev_lower, mode='lines', 
             name='Lower Bound', line=dict(color='red', dash='dash')
         ))
 
@@ -136,10 +146,14 @@ def update_graph_live(n, selected_device_id, live_view_status):
         for _, alert_bytes in alerts:
             alert = {k: v for k, v in alert_bytes.items()}
             if alert.get('device_id') == selected_device_id:
-                anomaly_data.append({
-                    'timestamp': float(alert.get('timestamp')),
-                    'temperature': float(alert.get('temp_reading'))
-                })
+                # Ensure all expected keys are present before appending
+                if all(k in alert for k in ['timestamp', 'temp_reading', 'moving_average', 'standard_deviation']):
+                    anomaly_data.append({
+                        'timestamp': float(alert.get('timestamp')),
+                        'temperature': float(alert.get('temp_reading')),
+                        'moving_average': float(alert.get('moving_average')),
+                        'standard_deviation': float(alert.get('standard_deviation'))
+                    })
     except Exception as e:
         print(f"Error querying Redis for anomaly alerts: {e}")
 
@@ -148,11 +162,28 @@ def update_graph_live(n, selected_device_id, live_view_status):
     if not anomaly_df.empty:
         anomaly_df['timestamp'] = pd.to_datetime(anomaly_df['timestamp'], unit='ms', utc=True)
         anomaly_df['timestamp'] = anomaly_df['timestamp'].dt.tz_convert('Africa/Johannesburg')
+        
+        std_dev_multiplier = float(params.get('std_dev_multiplier', 2.0))
+        anomaly_df['upper_bound'] = anomaly_df['moving_average'] + (std_dev_multiplier * anomaly_df['standard_deviation'])
+        anomaly_df['lower_bound'] = anomaly_df['moving_average'] - (std_dev_multiplier * anomaly_df['standard_deviation'])
+
         fig.add_trace(go.Scatter(
             x=anomaly_df['timestamp'], y=anomaly_df['temperature'], mode='markers',
             name='Anomaly Alert', marker=dict(color='red', size=10, symbol='circle')
         ))
         
+        # --- FIX: Add markers for the specific bounds at the time of each anomaly ---
+        fig.add_trace(go.Scatter(
+            x=anomaly_df['timestamp'], y=anomaly_df['upper_bound'], mode='markers',
+            name='Anomaly Upper Bound', marker=dict(color='purple', size=11, symbol='cross-thin'),
+            hoverinfo='skip'
+        ))
+        fig.add_trace(go.Scatter(
+            x=anomaly_df['timestamp'], y=anomaly_df['lower_bound'], mode='markers',
+            name='Anomaly Lower Bound', marker=dict(color='purple', size=11, symbol='cross-thin'),
+            hoverinfo='skip'
+        ))
+
     # --- START OF THE FIX ---
     fig.update_layout(
         title=f'Live Temperature Readings for Sensor {selected_device_id}',
